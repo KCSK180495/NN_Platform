@@ -80,6 +80,9 @@ from nn_training_studio.ui.evaluation import (
 )
 
 
+from nn_training_studio.ui.scrollable import ScrollableForm
+
+
 class DeployIntegrateWindow(tk.Toplevel):
     """Guided workspace for turning a saved model into an application package."""
 
@@ -89,7 +92,7 @@ class DeployIntegrateWindow(tk.Toplevel):
         apply_window_branding(self)
         self.title(f"{APPLICATION_NAME} {APP_VERSION} — Deploy & Integrate")
         self.geometry("1240x860")
-        self.minsize(980, 680)
+        self.minsize(760, 520)
 
         self.descriptor = None
         self.selected_model_path = None
@@ -175,14 +178,16 @@ class DeployIntegrateWindow(tk.Toplevel):
             text="Deploy & Integrate Model",
             font=("Arial", 19, "bold"),
         ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
+        self.deploy_subtitle = ttk.Label(
             header,
             text=(
                 "Import application → choose model/API → validate → output code "
                 "→ continue coding with AI assistance"
             ),
             foreground="#245a85",
-        ).grid(row=1, column=0, sticky="w", pady=(3, 0))
+            wraplength=1000,
+        )
+        self.deploy_subtitle.grid(row=1, column=0, sticky="w", pady=(3, 0))
         ttk.Label(
             header,
             text=APP_VERSION,
@@ -264,7 +269,13 @@ class DeployIntegrateWindow(tk.Toplevel):
         self.notebook.bind("<<NotebookTabChanged>>", self.refresh_deploy_step)
         self.bind("<Alt-Left>", lambda _event: self.move_deploy_step(-1))
         self.bind("<Alt-Right>", lambda _event: self.move_deploy_step(1))
+        self.bind("<Configure>", self._resize_deploy_text, add="+")
         self.after_idle(self.refresh_deploy_step)
+
+    def _resize_deploy_text(self, event):
+        if event.widget is self:
+            self.deploy_subtitle.configure(wraplength=max(300, event.width - 120))
+            self.deploy_step_hint_label.configure(wraplength=max(180, event.width - 430))
 
     def move_deploy_step(self, change):
         tabs = self.notebook.tabs()
@@ -431,8 +442,11 @@ class DeployIntegrateWindow(tk.Toplevel):
         ).pack(fill=tk.X, padx=7, pady=(3, 7))
 
     def build_model_tab(self):
+        self.model_form = ScrollableForm(self.model_tab)
+        self.model_form.pack(fill=tk.BOTH, expand=True)
+        content = self.model_form.content
         mode_frame = ttk.LabelFrame(
-            self.model_tab,
+            content,
             text="Choose What the Application Will Use",
         )
         mode_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
@@ -486,7 +500,7 @@ class DeployIntegrateWindow(tk.Toplevel):
             command=self.open_provider_settings,
         ).grid(row=1, column=3, sticky="e", padx=8, pady=(0, 7))
 
-        model_bar = ttk.LabelFrame(self.model_tab, text="Optional Local Model")
+        model_bar = ttk.LabelFrame(content, text="Optional Local Model")
         model_bar.pack(fill=tk.X, padx=10, pady=5)
         self.select_model_button = ttk.Button(
             model_bar,
@@ -507,13 +521,13 @@ class DeployIntegrateWindow(tk.Toplevel):
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
 
         summary_frame = ttk.LabelFrame(
-            self.model_tab,
+            content,
             text="Model Overview",
         )
         summary_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.model_summary_text = ScrolledText(
             summary_frame,
-            height=12,
+            height=6,
             wrap=tk.WORD,
         )
         self.model_summary_text.pack(
@@ -528,7 +542,7 @@ class DeployIntegrateWindow(tk.Toplevel):
         )
 
         settings = ttk.LabelFrame(
-            self.model_tab,
+            content,
             text="Deployment Choice",
         )
         settings.pack(fill=tk.X, padx=10, pady=(0, 10))
@@ -601,6 +615,9 @@ class DeployIntegrateWindow(tk.Toplevel):
             padx=(0, 8),
             pady=(0, 8),
         )
+        # Keep application/target choices ahead of the expandable overview.
+        summary_frame.pack_forget()
+        summary_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.refresh_provider_integration_status()
         self.on_integration_mode_changed()
 

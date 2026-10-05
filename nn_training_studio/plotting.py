@@ -202,6 +202,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from _plot_support import compute_tsne
 
 try:
     import seaborn as sns
@@ -211,9 +212,13 @@ except Exception:
 work = Path(sys.argv[1])
 manifest = json.loads((work / "context.json").read_text(encoding="utf-8"))
 tables = {
-    name: pd.read_csv(work / relative_path)
+    name: pd.read_csv(work / relative_path, dtype={column: str for column in
+                     manifest.get("string_columns", {}).get(name, [])}, keep_default_na=False)
     for name, relative_path in manifest["table_files"].items()
 }
+for name, columns in manifest.get("numeric_columns", {}).items():
+    for column in columns:
+        tables[name][column] = pd.to_numeric(tables[name][column], errors="coerce")
 context = {
     "tables": tables,
     "results": tables.get("results", next(iter(tables.values()))),
@@ -229,6 +234,7 @@ context = {
     "np": np,
     "plt": plt,
     "sns": sns,
+    "compute_tsne": compute_tsne,
 }
 safe_builtins = {
     "abs": abs,
@@ -300,6 +306,13 @@ def execute_custom_plot_code(code, context, timeout_seconds=30):
             "metadata": normalised["metadata"],
             "class_names": normalised["class_names"],
             "table_files": table_files,
+            "numeric_columns": {name: [str(c) for c in frame.columns
+                if pd.api.types.is_numeric_dtype(frame[c].dtype)]
+                for name, frame in normalised["tables"].items()},
+            "string_columns": {name: [str(c) for c in frame.columns
+                if pd.api.types.is_object_dtype(frame[c].dtype)
+                or isinstance(frame[c].dtype, (pd.StringDtype, pd.CategoricalDtype))]
+                for name, frame in normalised["tables"].items()},
         }
         (output_directory / "context.json").write_text(
             json.dumps(manifest, indent=2, default=_result_json_default),
@@ -309,6 +322,8 @@ def execute_custom_plot_code(code, context, timeout_seconds=30):
             code,
             encoding="utf-8",
         )
+        shutil.copy2(Path(__file__).with_name("result_customization.py"),
+                     output_directory / "_plot_support.py")
         (output_directory / "_plot_runner.py").write_text(
             _plot_runner_source(),
             encoding="utf-8",
@@ -355,24 +370,26 @@ def request_ai_plot_recipe(
     """Request reviewed plotting code from the configured provider."""
     if settings_owner is None:
         raise AIProviderError("Application AI settings are unavailable.")
-    provider_name = settings_owner.ai_provider_var.get()
+    settings = (settings_owner if isinstance(settings_owner, dict)
+                else snapshot_plot_provider_settings(settings_owner))
+    provider_name = settings["provider"]
     if provider_name not in OFFICIAL_PROVIDER_SETTINGS:
         raise AIProviderError(
             "Connect OpenAI, DeepSeek, Claude, or an OpenAI-compatible API "
             "in Settings before generating a plot."
         )
-    api_key = settings_owner.resolve_ai_api_key(provider_name)
+    api_key = settings["api_key"]
     defaults = OFFICIAL_PROVIDER_SETTINGS[provider_name]
     if not api_key:
         raise AIProviderError(
             "No API key is available. Configure "
             f"{defaults['api_key_environment']} or connect in Settings."
         )
-    model_name = settings_owner.ai_model_var.get().strip()
+    model_name = settings["model"]
     base_url = _validate_provider_base_url(
-        settings_owner.ai_base_url_var.get()
+        settings["base_url"]
     )
-    timeout_seconds = float(settings_owner.ai_timeout_var.get())
+    timeout_seconds = float(settings["timeout"])
     prompt = {
         "request": str(user_request or "").strip(),
         "result_context_schema": context_schema,
@@ -394,7 +411,13 @@ def request_ai_plot_recipe(
                 "np",
                 "plt",
                 "sns",
+                "compute_tsne",
             ],
+            "helpers": {
+                "compute_tsne": "context['compute_tsne'](df, columns=None, perplexity=30, max_samples=1000) returns tsne_1/tsne_2 with aligned row indices. Defaults to feature_* columns. Never include labels, predictions, or record numbers as input features.",
+                "heatmaps": "Use ax.imshow with a colorbar; Matplotlib and NumPy are always available. Seaborn is optional and may be None.",
+                "training": "Use training_history.epoch for X; plot loss and accuracy on separate axes. The source description identifies what embedding_features represents.",
+            },
             "restrictions": [
                 "No imports.",
                 "No files, network, operating-system, or subprocess access.",
@@ -547,3 +570,17 @@ def request_ai_plot_recipe(
     recipe["model"] = model_name
     recipe["data_sent"] = context_schema["privacy"]
     return recipe
+
+
+def snapshot_plot_provider_settings(owner):
+    """Read Tk-backed settings on the UI thread before starting network work."""
+    if owner is None:
+        raise AIProviderError("Application AI settings are unavailable.")
+    provider = owner.ai_provider_var.get()
+    return {
+        "provider": provider,
+        "api_key": owner.resolve_ai_api_key(provider),
+        "model": owner.ai_model_var.get().strip(),
+        "base_url": owner.ai_base_url_var.get(),
+        "timeout": float(owner.ai_timeout_var.get()),
+    }

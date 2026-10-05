@@ -733,6 +733,7 @@ class HomeMixin:
         self.y_pred_result = None
         self.result_target_names = []
         self.anomaly_scores = None
+        self.clear_training_custom_results()
 
     def start_training_workspace(self, data_mode):
         if self.training_running or self.ai_request_running:

@@ -119,3 +119,47 @@ startup. It no longer runs merely from importing the package.
 The full desktop UI, actual TensorFlow training, external AI requests, and YOLO
 workflows still require testing on a configured desktop. Dependency ranges are
 declared for setup; they are not a lockfile from a fully tested desktop environment.
+
+## V42.3: deployment resizing and custom training plots
+
+The deployment Integration Choice page keeps Target, Communication, and Model
+Format above the model overview. Vertical and horizontal scrollbars keep the form
+reachable when restoring, resizing, or maximizing the window; Back/Next remain
+outside the scroll area.
+
+After training, choose **Customize Results / AI Plots** on the training page,
+or **Customize plots / AI** in the guided Results stage:
+
+1. Choose a built-in plot. **Loss & Accuracy** uses separate loss and metric axes;
+   **Confusion Matrix** includes all known classes; **Correlation Heatmap** and
+   **t-SNE** use the sampled held-out features. Selecting a template chooses its
+   corresponding table automatically. Templates are editable Python.
+2. For AI assistance, connect your provider in Settings, describe the plot, and
+   select **Generate Plot Code with AI**. For example: “Create a blue confusion
+   matrix heatmap with row percentages” or “Plot t-SNE colored by actual_label.”
+3. Review the generated code and select **Validate and Run Preview**. AI requests
+   contain the result schema and summary statistics, not raw result rows. Plotting
+   runs locally in a separate process, with a 30-second timeout.
+4. Export the PNG/SVG, recipe, and data using **Save Custom Result ZIP**, or choose
+   **Add to Complete Results** before saving the training result/model package.
+   Attachments belong to the completed run and clear when a new run/project starts.
+
+For signal/tabular training, `embedding_features` contains preprocessed held-out
+model inputs (windows are flattened). It retains at most 1,000 reproducibly sampled
+rows and 128 evenly spaced feature coordinates; `record_number` maps each point
+back to the held-out prediction table. For image classifiers it contains predicted
+class probabilities, **not** hidden-layer embeddings or raw image pixels. These
+choices are described in Available Data and the complete-results export. t-SNE is
+an exploratory view, not a measure of accuracy or proof of class separation.
+
+Manual/AI recipes can call
+`context['compute_tsne'](df, columns=None, perplexity=30, max_samples=1000)`.
+The helper defaults to `feature_*` columns, excludes labels/record numbers,
+standardizes features, and returns aligned `tsne_1`/`tsne_2` coordinates. Heatmaps
+use Matplotlib and do not need Seaborn. AI code validation is an accidental-misuse
+guard, not a sandbox for hostile code; inspect unfamiliar recipes before running.
+
+Implementation locations: `ui/scrollable.py` for scrollable forms,
+`ui/deploy.py` for deployment layout, `ui/wizard_results.py` for training result
+contexts and attachments, `result_customization.py` for sampling/templates/t-SNE,
+and `ui/results.py` plus `plotting.py` for preview, AI requests, and export.

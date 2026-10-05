@@ -85,6 +85,9 @@ from nn_training_studio.training import (
 )
 
 
+from nn_training_studio.result_customization import make_feature_sample
+
+
 class TrainingWorkflowMixin:
     """TrainingWorkflow behavior for the main application."""
 
@@ -181,6 +184,15 @@ class TrainingWorkflowMixin:
             ),
         )
         self.deploy_trained_button.pack(side=tk.LEFT, padx=5)
+
+        custom_row = ttk.Frame(self.content_frame)
+        custom_row.pack(fill=tk.X, pady=4)
+        self.custom_training_results_button = ttk.Button(
+            custom_row, text="Customize Results / AI Plots",
+            command=self.open_training_results_studio,
+            state=tk.NORMAL if self.trained_model is not None else tk.DISABLED)
+        self.custom_training_results_button.pack(side=tk.LEFT, padx=5)
+        ttk.Label(custom_row, text="Heatmaps, t-SNE, training curves, and editable AI plots").pack(side=tk.LEFT, padx=6)
 
         preflight_frame = ttk.Frame(self.content_frame)
         preflight_frame.pack(fill=tk.X, padx=5, pady=(2, 3))
@@ -708,6 +720,7 @@ class TrainingWorkflowMixin:
         self.save_button.config(state=tk.DISABLED)
         self.save_results_button.config(state=tk.DISABLED)
         self.plot_button.config(state=tk.DISABLED)
+        self.custom_training_results_button.config(state=tk.DISABLED)
         self.back_button.config(state=tk.DISABLED)
         self.next_button.config(state=tk.DISABLED)
 
@@ -724,6 +737,7 @@ class TrainingWorkflowMixin:
         self.y_pred_result = None
         self.result_target_names = []
         self.anomaly_scores = None
+        self.clear_training_custom_results()
         self.training_error_text = ""
 
         for item in self.epoch_tree.get_children():
@@ -1383,6 +1397,12 @@ class TrainingWorkflowMixin:
             self.y_pred_result = predicted_result
             self.result_target_names = result_target_names
             self.anomaly_scores = anomaly_scores
+            self.training_feature_sample = make_feature_sample(
+                X_test, actual_result if task_type == TASK_CLASSIFICATION else None,
+                predicted_result if task_type == TASK_CLASSIFICATION else None, class_names)
+            self.training_feature_source = (
+                "Embedding uses model-input features after preprocessing; windows are flattened. "
+                "Large feature sets retain up to 128 evenly spaced coordinates.")
 
             self.thread_log("\nTraining completed successfully.")
             self.thread_log(
@@ -1752,6 +1772,10 @@ class TrainingWorkflowMixin:
             self.y_pred_result = predicted_labels
             self.result_target_names = []
             self.anomaly_scores = None
+            self.training_feature_sample = make_feature_sample(
+                raw_prediction, actual_labels, predicted_labels, class_names)
+            self.training_feature_source = (
+                "Image embedding uses predicted class probabilities, not image pixels or hidden-layer features.")
 
             self.thread_log("\nTraining completed successfully.")
             self.thread_log(
@@ -1789,6 +1813,7 @@ class TrainingWorkflowMixin:
         self.save_button.config(state=tk.NORMAL)
         self.save_results_button.config(state=tk.NORMAL)
         self.plot_button.config(state=tk.NORMAL)
+        self.custom_training_results_button.config(state=tk.NORMAL)
         self.back_button.config(state=tk.NORMAL)
         self.next_button.config(state=tk.DISABLED, text="Finish")
 
@@ -1833,6 +1858,7 @@ class TrainingWorkflowMixin:
         self.save_button.config(state=tk.DISABLED)
         self.save_results_button.config(state=tk.DISABLED)
         self.plot_button.config(state=tk.DISABLED)
+        self.custom_training_results_button.config(state=tk.DISABLED)
         self.back_button.config(state=tk.NORMAL)
         self.next_button.config(state=tk.DISABLED, text="Finish")
 
@@ -2014,7 +2040,7 @@ class TrainingWorkflowMixin:
             or self.metadata.get("source_file")
             or "Training dataset"
         )
-        return write_complete_result_files(
+        created_files = write_complete_result_files(
             output_directory,
             title="Model Training and Held-out Test Results",
             task_type=task_type,
@@ -2032,6 +2058,8 @@ class TrainingWorkflowMixin:
             target_names=self.result_target_names,
             anomaly_scores=self.anomaly_scores,
         )
+
+        return self.export_training_custom_results(output_directory, created_files)
 
     def save_training_results(self):
         """Save complete training/evaluation evidence without duplicating model."""

@@ -329,7 +329,7 @@ AI_API_PURPOSES = [
 ]
 
 
-APP_VERSION = "V42.2"
+APP_VERSION = "V42.3"
 
 
 APPLICATION_NAME = "NN Training Studio"
@@ -1156,6 +1156,9 @@ BUILT_IN_RESULT_PLOTS = [
     "Actual vs Predicted",
     "Residual Distribution",
     "Training Curves",
+    "Loss & Accuracy",
+    "Correlation Heatmap",
+    "t-SNE",
     "Detection Count by Class",
     "Confidence Distribution",
 ]

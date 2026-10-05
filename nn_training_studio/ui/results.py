@@ -6,6 +6,7 @@ from tkinter.scrolledtext import ScrolledText
 from datetime import datetime
 from tkinter import filedialog
 import json
+import queue
 from tkinter import messagebox
 import numpy as np
 import os
@@ -35,11 +36,16 @@ from nn_training_studio.plotting import (
     execute_custom_plot_code,
     request_ai_plot_recipe,
     validate_custom_plot_code,
+    snapshot_plot_provider_settings,
 )
 from nn_training_studio.results import (
     _result_json_default,
     zip_result_directory,
 )
+
+
+from nn_training_studio.result_customization import extra_plot_code
+from nn_training_studio.ui.scrollable import ScrollableForm
 
 
 class CustomResultsStudioWindow(tk.Toplevel):
@@ -55,7 +61,7 @@ class CustomResultsStudioWindow(tk.Toplevel):
         super().__init__(parent)
         self.title(f"NN Training Studio {APP_VERSION} — Custom Results")
         self.geometry("1320x860")
-        self.minsize(1080, 720)
+        self.minsize(760, 520)
         self.context_provider = context_provider
         self.settings_owner = settings_owner
         self.attach_callback = attach_callback
@@ -66,6 +72,10 @@ class CustomResultsStudioWindow(tk.Toplevel):
         self.ai_recipe = None
         self.ai_running = False
         self.plot_running = False
+        self.completed_plot_snapshot = None
+        self._worker_results = queue.Queue()
+        self._worker_lock = threading.Lock()
+        self._closed = False
 
         self.mode_var = tk.StringVar(value=PLOT_MODE_BUILT_IN)
         self.table_var = tk.StringVar(value="")
@@ -75,15 +85,17 @@ class CustomResultsStudioWindow(tk.Toplevel):
         self.status_var = tk.StringVar(value="Loading result context...")
 
         self.protocol("WM_DELETE_WINDOW", self.close_window)
+        self.bind("<Destroy>", self._on_studio_destroy, add="+")
         self.build_interface()
         self.refresh_context()
+        self._poll_after_id = self.after(100, self._poll_workers)
 
     def build_interface(self):
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=12, pady=(10, 5))
         ttk.Label(
             header,
-            text="Model Application & Custom Results Studio",
+            text="Training & Model Results Studio",
             font=("Arial", 18, "bold"),
         ).pack(side=tk.LEFT)
         ttk.Button(
@@ -118,23 +130,30 @@ class CustomResultsStudioWindow(tk.Toplevel):
         )
         self.schema_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        controls = ttk.LabelFrame(self.design_tab, text="Plot Mode and Data")
+        self.design_form = ScrollableForm(self.design_tab)
+        self.design_form.pack(fill=tk.BOTH, expand=True)
+        design_content = self.design_form.content
+        controls = ttk.LabelFrame(design_content, text="Plot Mode and Data")
         controls.pack(fill=tk.X, padx=8, pady=8)
+        mode_row = ttk.Frame(controls)
+        mode_row.pack(fill=tk.X)
         for text_value in (
             PLOT_MODE_BUILT_IN,
             PLOT_MODE_MANUAL,
             PLOT_MODE_AI,
         ):
             ttk.Radiobutton(
-                controls,
+                mode_row,
                 text=text_value,
                 value=text_value,
                 variable=self.mode_var,
             ).pack(side=tk.LEFT, padx=8, pady=7)
 
-        ttk.Label(controls, text="Table:").pack(side=tk.LEFT, padx=(18, 4))
+        data_row = ttk.Frame(controls)
+        data_row.pack(fill=tk.X, pady=4)
+        ttk.Label(data_row, text="Table:").pack(side=tk.LEFT, padx=(18, 4))
         self.table_combo = ttk.Combobox(
-            controls,
+            data_row,
             textvariable=self.table_var,
             state="readonly",
             width=22,
@@ -144,18 +163,20 @@ class CustomResultsStudioWindow(tk.Toplevel):
             "<<ComboboxSelected>>",
             lambda _event: self.refresh_column_choices(),
         )
-        ttk.Label(controls, text="Built-in:").pack(
+        ttk.Label(data_row, text="Built-in:").pack(
             side=tk.LEFT, padx=(18, 4)
         )
-        ttk.Combobox(
-            controls,
+        self.plot_type_combo = ttk.Combobox(
+            data_row,
             textvariable=self.plot_type_var,
             values=BUILT_IN_RESULT_PLOTS,
             state="readonly",
             width=25,
-        ).pack(side=tk.LEFT, padx=4)
+        )
+        self.plot_type_combo.pack(side=tk.LEFT, padx=4)
+        self.plot_type_combo.bind("<<ComboboxSelected>>", self.on_plot_type_selected)
 
-        columns = ttk.Frame(self.design_tab)
+        columns = ttk.Frame(design_content)
         columns.pack(fill=tk.X, padx=8, pady=(0, 5))
         ttk.Label(columns, text="X / Actual column:").pack(side=tk.LEFT)
         self.x_combo = ttk.Combobox(
@@ -180,7 +201,7 @@ class CustomResultsStudioWindow(tk.Toplevel):
         ).pack(side=tk.RIGHT, padx=4)
 
         ai_frame = ttk.LabelFrame(
-            self.design_tab,
+            design_content,
             text="AI Plot Request (schema and statistics only; no raw rows)",
         )
         ai_frame.pack(fill=tk.X, padx=8, pady=5)
@@ -205,7 +226,7 @@ class CustomResultsStudioWindow(tk.Toplevel):
         self.ai_generate_button.pack(side=tk.RIGHT, padx=8, pady=8)
 
         editor_frame = ttk.LabelFrame(
-            self.design_tab,
+            design_content,
             text=(
                 "Editable Python — define create_plot(context) and return a "
                 "Matplotlib Figure"
@@ -222,10 +243,11 @@ class CustomResultsStudioWindow(tk.Toplevel):
             wrap=tk.NONE,
             font=("Consolas", 10),
             undo=True,
+            height=12,
         )
         self.code_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        actions = ttk.Frame(self.design_tab)
+        actions = ttk.Frame(design_content)
         actions.pack(fill=tk.X, padx=8, pady=(3, 8))
         ttk.Button(
             actions,
@@ -361,6 +383,9 @@ class CustomResultsStudioWindow(tk.Toplevel):
         x_column = self.x_column_var.get()
         y_column = self.y_column_var.get()
         plot_type = self.plot_type_var.get()
+        if plot_type in ("Loss & Accuracy", "Correlation Heatmap", "t-SNE") or (
+                plot_type == "Training Curves" and table_name == "training_history"):
+            return extra_plot_code(plot_type, table_name, self.context["tables"][table_name])
         if not table_name or self.context is None:
             raise ValueError("Choose an available result table.")
         frame = self.context["tables"][table_name]
@@ -446,6 +471,8 @@ class CustomResultsStudioWindow(tk.Toplevel):
                 )
             body = [
                 f"matrix = pd.crosstab(df[{actual_column!r}], df[{predicted_column!r}])",
+                "labels = context['class_names'] or sorted(set(matrix.index) | set(matrix.columns))",
+                "matrix = matrix.reindex(index=labels, columns=labels, fill_value=0)",
                 "image = ax.imshow(matrix.to_numpy())",
                 "ax.set_xticks(range(len(matrix.columns)), [str(v) for v in matrix.columns], rotation=45, ha='right')",
                 "ax.set_yticks(range(len(matrix.index)), [str(v) for v in matrix.index])",
@@ -527,6 +554,7 @@ class CustomResultsStudioWindow(tk.Toplevel):
             self.code_text.delete("1.0", tk.END)
             self.code_text.insert(tk.END, code)
             self.mode_var.set(PLOT_MODE_BUILT_IN)
+            self.ai_recipe = None
             self.status_var.set("Built-in template inserted. Review or run it.")
         except Exception as exc:
             self.status_var.set(str(exc))
@@ -608,6 +636,7 @@ class CustomResultsStudioWindow(tk.Toplevel):
                 )
                 if not approved:
                     return
+            provider_settings = snapshot_plot_provider_settings(self.settings_owner)
         except Exception as exc:
             messagebox.showerror(
                 "AI Provider Settings",
@@ -622,21 +651,21 @@ class CustomResultsStudioWindow(tk.Toplevel):
         )
         threading.Thread(
             target=self._ai_generation_worker,
-            args=(json.loads(json.dumps(self.context_schema)), request_text),
+            args=(provider_settings, json.loads(json.dumps(self.context_schema)), request_text),
             daemon=True,
         ).start()
 
-    def _ai_generation_worker(self, context_schema, request_text):
+    def _ai_generation_worker(self, provider_settings, context_schema, request_text):
         try:
             recipe = request_ai_plot_recipe(
-                self.settings_owner,
+                provider_settings,
                 context_schema,
                 request_text,
             )
-            self.after(0, lambda: self.finish_ai_generation(recipe))
+            self._deliver_worker_result("ai_done", recipe)
         except Exception as exc:
             details = str(exc)
-            self.after(0, lambda: self.fail_ai_generation(details))
+            self._deliver_worker_result("ai_failed", details)
 
     def finish_ai_generation(self, recipe):
         self.ai_running = False
@@ -701,6 +730,8 @@ class CustomResultsStudioWindow(tk.Toplevel):
             return
         code = self.code_text.get("1.0", tk.END).strip()
         context_snapshot = _normalise_result_context(self.context)
+        self._pending_plot_snapshot = {"context": context_snapshot, "recipe": self.current_recipe(),
+                                       "explanation": self.ai_explanation_text.get("1.0", tk.END).strip()}
         self.plot_running = True
         self.run_button.config(state=tk.DISABLED)
         self.status_var.set("Running plot in a separate process...")
@@ -717,16 +748,17 @@ class CustomResultsStudioWindow(tk.Toplevel):
                 context_snapshot,
                 timeout_seconds=30,
             )
-            self.after(0, lambda: self.finish_plot_execution(directory))
+            self._deliver_worker_result("plot_done", directory)
         except Exception as exc:
             details = str(exc)
-            self.after(0, lambda: self.fail_plot_execution(details))
+            self._deliver_worker_result("plot_failed", details)
 
     def finish_plot_execution(self, directory):
         self.plot_running = False
         self.run_button.config(state=tk.NORMAL)
         old_directory = self.current_output_directory
         self.current_output_directory = directory
+        self.completed_plot_snapshot = self._pending_plot_snapshot
         if old_directory and old_directory != directory:
             shutil.rmtree(old_directory, ignore_errors=True)
         self.display_plot_preview(Path(directory) / "plot.png")
@@ -829,17 +861,21 @@ class CustomResultsStudioWindow(tk.Toplevel):
         source = Path(self.current_output_directory)
         for name in ("plot.png", "plot.svg", "plot_code.py"):
             shutil.copy2(source / name, destination / name)
-        selected_table = self.context["tables"][self.table_var.get()]
+        snapshot = self.completed_plot_snapshot
+        recipe = snapshot["recipe"]
+        context = snapshot["context"]
+        table_name = recipe["table"]
+        # Preserve every table used by multi-table AI recipes, not just the selector.
+        for path in source.glob("table_*.csv"):
+            shutil.copy2(path, destination / path.name)
+        shutil.copy2(source / "context.json", destination / "context.json")
+        selected_table = context["tables"][table_name]
         selected_table.to_csv(destination / "plot_data.csv", index=False)
-        recipe = self.current_recipe()
         (destination / "plot_recipe.json").write_text(
             json.dumps(recipe, indent=2, default=_result_json_default),
             encoding="utf-8",
         )
-        explanation = self.ai_explanation_text.get(
-            "1.0",
-            tk.END,
-        ).strip()
+        explanation = snapshot["explanation"]
         (destination / "ai_explanation.txt").write_text(
             explanation,
             encoding="utf-8",
@@ -849,12 +885,12 @@ class CustomResultsStudioWindow(tk.Toplevel):
                 {
                     "application_version": APP_VERSION,
                     "created_at": datetime.now().isoformat(timespec="seconds"),
-                    "title": self.context["title"],
-                    "task_type": self.context["task_type"],
-                    "model_type": self.context["model_type"],
-                    "source": self.context["source"],
-                    "selected_table": self.table_var.get(),
-                    "metrics": self.context["metrics"],
+                    "title": context["title"],
+                    "task_type": context["task_type"],
+                    "model_type": context["model_type"],
+                    "source": context["source"],
+                    "selected_table": table_name,
+                    "metrics": context["metrics"],
                 },
                 indent=2,
                 default=_result_json_default,
@@ -900,12 +936,12 @@ class CustomResultsStudioWindow(tk.Toplevel):
             self.materialize_custom_result(transfer_directory)
             self.attach_callback(
                 transfer_directory,
-                self.current_recipe(),
+                self.completed_plot_snapshot["recipe"],
             )
             messagebox.showinfo(
                 "Custom Result Added",
                 "This visualization will be included the next time you save "
-                "the complete evaluation or detection results.",
+                "the complete training, evaluation, or detection results.",
                 parent=self,
             )
         except Exception as exc:
@@ -932,10 +968,63 @@ class CustomResultsStudioWindow(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror("Open Plot Error", str(exc), parent=self)
 
-    def close_window(self):
+    def _release_result_resources(self):
+        callback = getattr(self, "_poll_after_id", None)
+        if callback is not None:
+            self.after_cancel(callback)
+            self._poll_after_id = None
+        with self._worker_lock:
+            self._closed = True
+            while not self._worker_results.empty():
+                kind, payload = self._worker_results.get_nowait()
+                if kind == "plot_done":
+                    shutil.rmtree(payload, ignore_errors=True)
         if self.current_output_directory:
             shutil.rmtree(
                 self.current_output_directory,
                 ignore_errors=True,
             )
+        self.current_output_directory = None
+
+    def close_window(self):
+        self._release_result_resources()
         self.destroy()
+
+    def _on_studio_destroy(self, event):
+        if event.widget is self:
+            self._release_result_resources()
+
+    def on_plot_type_selected(self, _event=None):
+        if self.context is None:
+            return
+        plot = self.plot_type_var.get()
+        table = {"Training Curves": "training_history", "Loss & Accuracy": "training_history",
+                 "Confusion Matrix": "results", "Correlation Heatmap": "embedding_features",
+                 "t-SNE": "embedding_features"}.get(plot)
+        if table in self.context["tables"]:
+            self.table_var.set(table)
+        self.refresh_column_choices()
+        if plot == "Confusion Matrix":
+            columns = self.context["tables"][self.table_var.get()].columns
+            if "actual_label" in columns and "predicted_label" in columns:
+                self.x_column_var.set("actual_label")
+                self.y_column_var.set("predicted_label")
+        self.insert_builtin_template()
+
+    def _deliver_worker_result(self, kind, payload):
+        with self._worker_lock:
+            if self._closed:
+                if kind == "plot_done":
+                    shutil.rmtree(payload, ignore_errors=True)
+            else:
+                self._worker_results.put((kind, payload))
+
+    def _poll_workers(self):
+        if self._closed:
+            return
+        handlers = {"ai_done": self.finish_ai_generation, "ai_failed": self.fail_ai_generation,
+                    "plot_done": self.finish_plot_execution, "plot_failed": self.fail_plot_execution}
+        while not self._worker_results.empty():
+            kind, payload = self._worker_results.get_nowait()
+            handlers[kind](payload)
+        self._poll_after_id = self.after(100, self._poll_workers)

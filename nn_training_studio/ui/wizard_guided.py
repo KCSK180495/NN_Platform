@@ -483,6 +483,7 @@ class GuidedWorkflowMixin:
         except Exception as exc:
             self._guided_note(f"Example preview unavailable: {exc}")
         self._guided_actions([("Show result graphs", self.show_plots),
+                              ("Customize plots / AI", self.open_training_results_studio),
                               ("Save complete results", self.save_training_results)])
         self._guided_note("Use new data from your intended application to check how well these results generalise.")
 

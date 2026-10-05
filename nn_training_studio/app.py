@@ -69,6 +69,9 @@ from nn_training_studio.ui.wizard_training_workflow import (
 )
 
 
+from nn_training_studio.ui.wizard_results import TrainingResultsMixin
+
+
 class NNWizardApp(
     GuidedWorkflowMixin,
     LayoutMixin,
@@ -85,6 +88,7 @@ class NNWizardApp(
     PreprocessingMixin,
     ModelSettingsMixin,
     TrainingWorkflowMixin,
+    TrainingResultsMixin,
     tk.Tk,
 ):
     def __init__(self):
@@ -256,6 +260,8 @@ class NNWizardApp(
         self.y_pred_result = None
         self.result_target_names = []
         self.anomaly_scores = None
+        self.clear_training_custom_results()
+        self.bind("<Destroy>", self._cleanup_training_results_on_destroy, add="+")
 
         self.ui_queue = queue.Queue()
         self.training_running = False
