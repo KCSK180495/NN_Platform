@@ -183,6 +183,9 @@ YOLO_EXPORT_FORMATS = [
 ]
 
 
+SCOPE_DEPLOY_TARGET = "NN Scope / Signal Monitoring"
+SCOPE_DEPLOY_PROTOCOL = "VISA / CSV playback"
+
 DEPLOY_TARGETS = [
     "Python Application",
     "Local REST API",
@@ -191,6 +194,7 @@ DEPLOY_TARGETS = [
     "Raspberry Pi / Edge Computer",
     "Camera / Object Detection",
     "Sensor / Serial Device",
+    SCOPE_DEPLOY_TARGET,
     "MQTT / IoT",
     "Modbus TCP / PLC",
     "OPC UA",
@@ -203,6 +207,7 @@ DEPLOY_PROTOCOLS = [
     "HTTP / REST",
     "Docker",
     "USB / Serial",
+    SCOPE_DEPLOY_PROTOCOL,
     "MQTT",
     "Modbus TCP",
     "OPC UA",
@@ -329,7 +334,7 @@ AI_API_PURPOSES = [
 ]
 
 
-APP_VERSION = "V42.3"
+APP_VERSION = "V42.4"
 
 
 APPLICATION_NAME = "NN Training Studio"

@@ -11,6 +11,8 @@ from nn_training_studio.constants import (
     DATA_MODE_TABULAR,
     DETECTOR_INFERENCE_EXTENSIONS,
     DETECTOR_TRAINABLE_EXTENSIONS,
+    SCOPE_DEPLOY_PROTOCOL,
+    SCOPE_DEPLOY_TARGET,
 )
 
 
@@ -26,9 +28,10 @@ def detect_saved_model_type(path):
     if suffix == ".zip":
         try:
             with zipfile.ZipFile(model_path, "r") as archive:
+                root_members = set(archive.namelist())
                 members = {
                     member.replace("\\", "/").lstrip("./")
-                    for member in archive.namelist()
+                    for member in root_members
                 }
         except zipfile.BadZipFile as exc:
             raise ValueError("The selected ZIP file is invalid.") from exc
@@ -51,6 +54,15 @@ def detect_saved_model_type(path):
             )
         ):
             return "keras_package"
+        if {"pipeline_runtime.json", "pipeline.json", "metadata.json"} <= root_members:
+            with zipfile.ZipFile(model_path) as archive:
+                runtime = json.loads(archive.read("pipeline_runtime.json"))
+            if isinstance(runtime, dict) and runtime.get("format") == "nn_studio.pipeline_bundle/1" and (
+                runtime.get("schema") != "nn_scope.pipeline/1" or "model.keras" not in root_members
+            ):
+                return "pipeline_package"
+        if {"model.keras", "metadata.json"} <= root_members:
+            return "scope_package"
         raise ValueError(
             "This ZIP is not a recognized NN Studio model package."
         )
@@ -85,6 +97,41 @@ def inspect_saved_model_descriptor(path):
         "capabilities": [],
         "details": {},
     }
+
+    if model_type == "pipeline_package":
+        from .processing_pipeline import Pipeline
+
+        pipeline = Pipeline.read(model_path)
+        with zipfile.ZipFile(model_path) as archive:
+            has_model = "model.keras" in archive.namelist()
+        descriptor.update(display_type="NN Studio processing pipeline", data_mode=DATA_MODE_TABULAR,
+                          task_type="Classification" if has_model else "Feature computation",
+                          inference_ready=has_model,
+                          capabilities=["Open Processing Pipeline to compute features and run the exported package"])
+        descriptor["details"].update(feature_columns=pipeline.outputs, sampling_frequency_hz=pipeline.rate)
+        return descriptor
+
+    if model_type == "scope_package":
+        from .scope_runtime.package_io import inspect_package
+
+        with zipfile.ZipFile(model_path) as archive:
+            metadata = json.loads(archive.read("metadata.json"))
+        try:
+            scope = inspect_package(model_path)
+        except (ValueError, KeyError, TypeError) as exc:
+            scope = None
+            descriptor["inference_ready"] = False
+            descriptor["details"]["compatibility"] = str(exc)
+        descriptor.update(display_type="NN Scope signal model", data_mode=DATA_MODE_TABULAR,
+                          task_type=metadata.get("task_type", "Classification"),
+                          capabilities=["Review the model and bind its physical inputs in NN Scope"])
+        descriptor["details"].update(
+            feature_columns=list(scope["inputs"]) if scope else [],
+            sampling_frequency_hz=metadata.get("sampling_frequency_hz"),
+            phase=metadata.get("phase"),
+            physical_hardware_fault_validation=metadata.get("physical_hardware_fault_validation"),
+        )
+        return descriptor
 
     if model_type == "keras_package":
         metadata = {}
@@ -275,6 +322,8 @@ def deployment_required_inputs(descriptor):
 def deployment_recommended_targets(descriptor):
     """Choose deployment targets that match the inspected model data mode."""
     data_mode = (descriptor or {}).get("data_mode")
+    if (descriptor or {}).get("model_type") == "scope_package":
+        return [SCOPE_DEPLOY_TARGET]
     common = [
         "Python Application",
         "Local REST API",
@@ -293,6 +342,7 @@ def deployment_recommended_targets(descriptor):
             "Raspberry Pi / Edge Computer",
         ]
     return common + [
+        SCOPE_DEPLOY_TARGET,
         "Raspberry Pi / Edge Computer",
         "Sensor / Serial Device",
         "MQTT / IoT",
@@ -304,6 +354,7 @@ def deployment_recommended_targets(descriptor):
 def deployment_default_protocol(target):
     """Select a sensible communication protocol for a deployment target."""
     return {
+        SCOPE_DEPLOY_TARGET: SCOPE_DEPLOY_PROTOCOL,
         "Python Application": "Direct Python",
         "Local REST API": "HTTP / REST",
         "Docker REST API": "Docker",
@@ -329,6 +380,13 @@ def deployment_compatibility_report(
     failures = []
     warnings = []
     passed = []
+    if target == SCOPE_DEPLOY_TARGET or (descriptor or {}).get("model_type") == "scope_package":
+        return {
+            "status": "Configure in NN Scope",
+            "failures": ["Open NN Scope to configure the capture source, preprocessing and channel mappings."],
+            "warnings": [],
+            "passed": [],
+        }
     if not descriptor:
         return {
             "status": "Not ready",

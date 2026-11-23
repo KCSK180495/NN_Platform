@@ -81,6 +81,8 @@ class FilterWorkspaceMixin:
         self.build_filter_workspace()
 
     def build_filter_workspace(self):
+        ttk.Button(self.content_frame, text="Open Processing Pipeline",
+                   command=self.open_pipeline_builder).pack(anchor="w", padx=8, pady=(4, 0))
         toolbar = ttk.Frame(self.content_frame)
         toolbar.pack(fill=tk.X, padx=8, pady=(8, 5))
         ttk.Button(
@@ -1757,6 +1759,15 @@ class FilterWorkspaceMixin:
 
     def initialize_signal_column_defaults(self):
         """Choose safe initial feature and target columns for a signal table."""
+        simulation = getattr(self, "simulink_import_metadata", None)
+        if simulation:
+            target = simulation.get("target_column")
+            self.target_cols = [target] if target in self.df.columns else []
+            self.label_col = self.target_cols[0] if self.target_cols else ""
+            self.label_var.set(self.label_col)
+            self.feature_cols = [c for c in simulation.get("feature_columns", []) if c in self.df.columns]
+            self.output_units_var.set(str(self.df[target].nunique()) if self.target_cols else "1")
+            return
         columns = list(self.df.columns)
         possible_labels = [
             "label_id",

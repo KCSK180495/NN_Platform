@@ -8,6 +8,7 @@ except Exception:
 from tkinter import messagebox
 import os
 import tkinter as tk
+from tkinter import ttk
 from nn_training_studio.ai_transport import (
     _masked_api_key,
     _validate_provider_base_url,
@@ -22,6 +23,71 @@ from nn_training_studio.constants import (
 
 class AISettingsMixin:
     """AISettings behavior for the main application."""
+
+    def build_ai_setup_intro(self, parent):
+        """Offer personal API setup before the home-page workflows."""
+        if getattr(self, "_ai_setup_deferred", False) and self.ai_connection_state != "connected":
+            return
+        self.ai_setup_intro = ttk.LabelFrame(
+            parent, text="Get started with your own AI API (recommended)", padding=10,
+        )
+        self.ai_setup_intro.pack(fill=tk.X, padx=12, pady=(4, 10))
+        self.ai_setup_description = ttk.Label(
+            self.ai_setup_intro,
+            text=(
+                "Connect OpenAI, DeepSeek, Claude, or a compatible provider for "
+                "AI-assisted data checks, filter design, and workflow guidance. "
+                "Use an API key from your own provider account."
+            ),
+            justify=tk.LEFT, wraplength=900,
+        )
+        self.ai_setup_description.pack(fill=tk.X)
+        self.ai_setup_status = ttk.Label(
+            self.ai_setup_intro, foreground="#245a85", justify=tk.LEFT, wraplength=900,
+        )
+        self.ai_setup_status.pack(fill=tk.X, pady=(6, 0))
+        actions = ttk.Frame(self.ai_setup_intro)
+        actions.pack(fill=tk.X, pady=(8, 0))
+        self.ai_setup_connect_button = ttk.Button(
+            actions, text="Connect my AI API", command=self.open_ai_api_setup,
+        )
+        self.ai_setup_connect_button.pack(side=tk.LEFT)
+        self.ai_setup_skip_button = ttk.Button(
+            actions, text="Continue without AI", command=self.defer_ai_api_setup,
+        )
+        self.ai_setup_skip_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.ai_setup_intro.bind("<Configure>", self.resize_ai_setup_intro)
+        self.refresh_ai_setup_intro()
+
+    def resize_ai_setup_intro(self, event):
+        for label in (self.ai_setup_description, self.ai_setup_status):
+            label.configure(wraplength=max(240, event.width - 24))
+
+    def refresh_ai_setup_intro(self):
+        if not hasattr(self, "ai_setup_intro") or not self.ai_setup_intro.winfo_exists():
+            return
+        connected = self.ai_connection_state == "connected"
+        self.ai_setup_intro.configure(
+            text="Your AI API is connected" if connected else "Get started with your own AI API (recommended)",
+        )
+        self.ai_setup_status.configure(text=self.ai_connection_message)
+        self.ai_setup_connect_button.configure(
+            text="Manage my AI API" if connected else "Connect my AI API",
+        )
+        if connected:
+            self.ai_setup_skip_button.pack_forget()
+        elif not self.ai_setup_skip_button.winfo_manager():
+            self.ai_setup_skip_button.pack(side=tk.LEFT, padx=(8, 0))
+
+    def open_ai_api_setup(self):
+        self.show_settings()
+        if self.current_view == "settings":
+            self.settings_provider_combo.focus_set()
+
+    def defer_ai_api_setup(self):
+        """Dismiss this session's recommendation without changing credentials."""
+        self._ai_setup_deferred = True
+        self.ai_setup_intro.destroy()
 
     def load_ai_settings(self):
         """Load non-secret preferences and an optional OS-stored credential."""
@@ -272,6 +338,7 @@ class AISettingsMixin:
         self.refresh_settings_status()
 
     def update_provider_status_display(self):
+        self.refresh_ai_setup_intro()
         if not hasattr(self, "provider_status_button"):
             return
         provider_name = self.ai_provider_var.get()

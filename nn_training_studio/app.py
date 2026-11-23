@@ -148,6 +148,7 @@ class NNWizardApp(
 
         self.data_mode_var = tk.StringVar(value=DATA_MODE_TABULAR)
         self.raw_df = None
+        self.simulink_import_metadata = None
         self.filtered_df = None
         self.df = None
         self.file_path = None

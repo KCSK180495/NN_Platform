@@ -1,0 +1,12 @@
+NN Training Studio for Windows
+
+Extract the entire ZIP. Open the extracted NN Training Studio folder.
+If Python and the dependencies are already installed, run Start_NN_Studio.cmd.
+
+For a new setup, use Python 3.11 or 3.12 with Tkinter. Open a terminal in this folder and run:
+    python -m venv .venv
+    .venv\Scripts\python.exe -m pip install -r requirements.txt
+Then run Start_NN_Studio.cmd. See README.md for optional dependencies and pipeline usage.
+
+The application includes the resizable Draft with AI dialog. Configure your
+own AI provider key in Settings if you want to use AI-assisted drafting.

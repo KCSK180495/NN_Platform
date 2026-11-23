@@ -699,6 +699,16 @@ class LayoutMixin:
             initial_goal=initial_goal,
         )
 
+    def open_scope_deployment(self):
+        from nn_training_studio.ui.deployment_scope import ScopeDeploymentWindow
+
+        existing = getattr(self, "_home_scope_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            return
+        self._home_scope_window = ScopeDeploymentWindow(self)
+
     def open_object_detection(self, initial_model_path=None):
         ObjectDetectionWindow(
             self,

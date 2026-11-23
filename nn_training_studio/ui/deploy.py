@@ -41,6 +41,7 @@ from nn_training_studio.constants import (
     INTEGRATION_MODE_PROVIDER_API,
     OFFICIAL_PROVIDER_SETTINGS,
     SUPPORTED_IMAGE_EXTENSIONS,
+    SCOPE_DEPLOY_TARGET,
 )
 from nn_training_studio.deployment import (
     deployment_compatibility_report,
@@ -616,6 +617,9 @@ class DeployIntegrateWindow(tk.Toplevel):
             pady=(0, 8),
         )
         # Keep application/target choices ahead of the expandable overview.
+        ttk.Button(settings, text="Open NN Scope…", command=self.open_scope).grid(
+            row=2, column=1, sticky="w", pady=(0, 8)
+        )
         summary_frame.pack_forget()
         summary_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.refresh_provider_integration_status()
@@ -2000,7 +2004,7 @@ class DeployIntegrateWindow(tk.Toplevel):
             title="Select Saved Model or Detector",
             filetypes=[
                 ("Supported models", "*.zip *.pt *.yaml *.yml *.onnx *.engine *.torchscript *.tflite *.pb *.xml"),
-                ("NN Studio package", "*.zip"),
+                ("NN Studio / NN Scope package", "*.zip"),
                 ("YOLO weights", "*.pt"),
                 ("Inference exports", "*.onnx *.engine *.torchscript *.tflite *.pb *.xml"),
                 ("All files", "*.*"),
@@ -2020,6 +2024,9 @@ class DeployIntegrateWindow(tk.Toplevel):
     def inspect_model_path(self, path):
         try:
             descriptor = inspect_saved_model_descriptor(path)
+            if descriptor["model_type"] == "pipeline_package":
+                self._get_ai_settings_owner().open_pipeline_builder(descriptor["path"])
+                return
         except Exception as exc:
             messagebox.showerror(
                 "Unsupported Model",
@@ -2524,6 +2531,9 @@ class DeployIntegrateWindow(tk.Toplevel):
             )
 
     def open_actual_test(self):
+        if self.is_scope_target():
+            self.open_scope()
+            return
         if not self.uses_local_model():
             messagebox.showinfo(
                 "Provider API Test",
@@ -2552,7 +2562,27 @@ class DeployIntegrateWindow(tk.Toplevel):
                 application_mode=True,
             )
 
+    def is_scope_target(self):
+        return self.target_var.get() == SCOPE_DEPLOY_TARGET or (
+            self.descriptor or {}
+        ).get("model_type") == "scope_package"
+
+    def open_scope(self):
+        from .deployment_scope import ScopeDeploymentWindow
+
+        existing = getattr(self, "_scope_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        self.target_var.set(SCOPE_DEPLOY_TARGET)
+        self.on_target_changed()
+        selected = self.selected_model_path if (self.descriptor or {}).get("data_mode") == DATA_MODE_TABULAR else None
+        self._scope_window = ScopeDeploymentWindow(self, initial_model_path=selected)
+
     def generate_code(self):
+        if self.is_scope_target():
+            self.open_scope()
+            return
         report = self.run_compatibility_check()
         if report["failures"]:
             messagebox.showwarning(
@@ -2720,6 +2750,9 @@ class DeployIntegrateWindow(tk.Toplevel):
         return digest.hexdigest()
 
     def create_deployment_package(self):
+        if self.is_scope_target():
+            self.open_scope()
+            return
         report = self.run_compatibility_check()
         if report["failures"]:
             messagebox.showerror(

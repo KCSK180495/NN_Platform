@@ -463,6 +463,26 @@ class ProjectsSettingsMixin:
         self.bind_all("<Button-4>", self._on_settings_mousewheel)
         self.bind_all("<Button-5>", self._on_settings_mousewheel)
 
+        setup_help = ttk.LabelFrame(outer, text="Connect your own provider account", padding=10)
+        setup_help.pack(fill=tk.X, padx=(0, 5), pady=(0, 8))
+        setup_instructions = ttk.Label(
+            setup_help,
+            text=(
+                "1. Choose OpenAI, DeepSeek, Claude, or an OpenAI-compatible provider below.\n"
+                "2. Enter an API key from your own provider account and select the model.\n"
+                "3. Select Test Connection, then Save Settings. Select Back to continue.\n\n"
+                "The API key connects this application to your provider; enter it only in the API key field. "
+                "Keys stay in this session unless you choose Remember securely on this computer. "
+                "You can also choose Local analysis only and continue with manual processing."
+            ),
+            justify=tk.LEFT, wraplength=900,
+        )
+        setup_instructions.pack(fill=tk.X)
+        setup_help.bind(
+            "<Configure>",
+            lambda event: setup_instructions.configure(wraplength=max(240, event.width - 24)),
+        )
+
         provider_frame = ttk.LabelFrame(
             outer,
             text="Provider Configuration",

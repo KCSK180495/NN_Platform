@@ -45,8 +45,122 @@ Ultralytics and its PyTorch dependencies. GPU support depends on your operating
 system, drivers, and TensorFlow/PyTorch installation. CPU operation is supported.
 
 AI-provider keys are optional and configured in the application's Settings.
+At startup, both Guided and Advanced Home recommend **Connect my AI API**.
+Choose your provider, enter your own API key and model, then use **Test Connection**
+and save the settings. **Continue without AI** dismisses the recommendation for
+the session; Settings stays available later. Keys remain session-only unless you
+enable secure OS credential storage, and are excluded from exported packages.
 Brand images were not part of the source upload. If available, place them in
 `assets/` beside `main.py`; accepted filenames are in `constants.py`.
+
+## Deploy a signal model with NN Scope
+
+Choose **Open NN Scope** on the home page or from **Deploy & Integrate**.
+
+1. On **Setup**, choose a saved capture CSV with its adjacent `metadata.json`.
+   Select **Preview waveform** to view it without a model. For a live
+   recording, choose **Oscilloscope**, connect, and set the physical channels.
+2. Choose a trusted Scope or NN Studio signal classification ZIP. Check the
+   input mapping. For the V example, select CH2 for `current_A` when CH2
+   measures phase V, then enter the recorded RPM or choose the speed channel.
+3. Choose **Run diagnosis** for a file or **Capture and diagnose** for an
+   oscilloscope. **Save results…** saves samples, predictions and metadata.
+   **Export deployment…** packages the workspace, configuration and model
+   assets. Extract the ZIP and run its `app.py`.
+
+Open **Advanced options** to choose a separate preprocessing profile or run
+multiple diagnoses. The embedded profile is used by default.
+
+NN Studio signal classifiers can deploy with a recorded training sample rate,
+ordered inputs, a supported fitted scaler, and preprocessing supported by Scope.
+Enter the training rate in the data analysis settings before training. When
+the training package does not publish input units, confirm them on Setup.
+Saved Scope profiles keep their original feature order, filter coefficients
+and reference policy. Packages with unsupported transforms or model outputs
+show the reason they are blocked.
+
+Playback works with the normal Studio dependencies. For live acquisition,
+install the optional VISA packages with
+`python -m pip install -r requirements-scope-instrument.txt`. Select your VISA
+backend. For USB, choose **Scan USB**, select the scope, click **Connect**,
+then **Capture waveform**. The DHO814 normally waits for the configured hardware
+trigger. If it times out, check the trigger source and level, or select **Force
+trigger while waiting** on Setup for a probe snapshot.
+
+For repeated waveform captures, select **Live view**. Select **Record…** to start
+recording immediately, or select it during Live view to save from the next
+acquisition. Choose a parent folder once. NN Scope shows the saved count and
+creates a dated session folder with a numbered subfolder for each capture.
+**Stop** ends the run. Open a capture's `native_samples.csv` in **CSV playback**
+to review it or run a diagnosis. Each waveform has its own trigger-relative
+time axis. Transfer, saving and rearming leave gaps between waveforms.
+
+USB recording was checked on DHO814 firmware 00.01.04 with three CH1 captures
+in Studio and two CH1–CH3 captures in an exported deployment. Each had 10,000
+samples per channel and used a forced trigger. Independent fault validation for the probe-test U model
+remains pending.
+
+In signal Data Preparation, **Import NN Scope Captures** reads the calibrated
+channels from saved native captures and preserves capture boundaries and
+calibration provenance. Supply independently confirmed labels for supervised
+training. Review the evaluation split before interpreting accuracy from
+overlapping windows.
+
+## Build a processing pipeline
+
+From Home, open **Build a processing pipeline** in Guided mode or
+**Open Processing Pipeline** in Advanced mode. Load a CSV, then declare input
+columns, units, and the sample rate in the recipe. Add steps from the operation
+menu. Keep `outputs` in the order you want to export or train on.
+
+```json
+{
+  "schema": "nn_studio.pipeline/2",
+  "name": "Current features",
+  "sample_rate_hz": 20000,
+  "inputs": {"current_A": "A"},
+  "steps": [
+    {"op": "butterworth", "inputs": ["current_A"], "outputs": ["filtered_A"],
+     "params": {"kind": "lowpass", "cutoff_hz": 500, "order": 4, "mode": "causal"}},
+    {"op": "rms", "inputs": ["filtered_A"], "outputs": ["rms_A"], "params": {"samples": 600}},
+    {"op": "standard", "inputs": ["rms_A"], "outputs": ["rms_std"], "params": {}}
+  ],
+  "outputs": ["filtered_A", "rms_std"]
+}
+```
+
+- **Draft with AI** offers an editable recipe using your configured provider.
+  The request includes your description, declared input names, units, and sample rate.
+  Studio computes each step locally.
+- **Fit from training CSV** fits Standard, MinMax, or Robust scaling on a separate
+  training or calibration file with the same input columns. For SSCN, enter
+  measured healthy references as `{"speed_rpm": 2000, "peak_a": 0.08}` values in
+  the step's `references` list. The normalization uses the matching startup RPM.
+- **Attach Python** includes code you select. A `python` step with
+  `interface: "columns"` calls `transform(columns, sample_rate_hz)` and expects
+  a tuple of aligned numeric arrays. For existing Studio filter code, set
+  `interface` to `studio_filter` and `entry` to `custom_filter`.
+  Optional `requirements` lists package names or `package==version` entries.
+  Running bundled Python requires enabling the trust option.
+- **Compute** previews features. **Save features** writes CSV or NPZ with
+  recording IDs and source sample indices. Select a recording ID column when
+  a CSV contains several recordings. Filter and custom-code state reset per recording.
+- **Continue to training** sends the prepared features to a classifier project.
+  Select a complete label column and provide enough recordings to hold out
+  validation and test sets while keeping every class in training. Save the
+  trained model package from Studio, then use **Export ZIP with model** in the
+  builder. The model must match the recipe, feature order, and fitted parameters.
+- **Export runnable ZIP** includes the recipe, numeric parameters, optional
+  Python source, and the local runner. Extract it and run
+  `python run_pipeline.py input.csv features.csv` after installing its requirements.
+  Add `--record-column` for a table of several recordings and `--predict` for an
+  attached classifier. The optional `serve_pipeline.py` provides local
+  `/transform` and `/predict` endpoints.
+
+The builder processes complete recordings so centered and zero-phase filters
+retain their behavior. Open an existing `nn_scope.pipeline/1` ZIP, such as the
+SSCN package, to compute features with its original recipe. NN Scope continues
+to use the v1 streaming format for capture and diagnosis.
 
 ## Where to make changes
 

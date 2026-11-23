@@ -2,6 +2,8 @@
 
 from tkinter.scrolledtext import ScrolledText
 import pandas as pd
+from nn_training_studio.simulink_data import RUN_COLUMN, SIMULINK_EVIDENCE_COLUMNS
+from nn_training_studio.scope_runtime.dataset import CAPTURE_ID, EVIDENCE_COLUMNS
 import tkinter as tk
 from tkinter import ttk
 from nn_training_studio.constants import (
@@ -237,6 +239,10 @@ class FeatureSelectionMixin:
         self.feature_listbox.selection_clear(0, tk.END)
 
         for i, col in enumerate(self.df.columns):
+            if RUN_COLUMN in self.df and col in SIMULINK_EVIDENCE_COLUMNS:
+                continue
+            if CAPTURE_ID in self.df and col in EVIDENCE_COLUMNS:
+                continue
             if col in target_cols:
                 continue
 
@@ -333,6 +339,10 @@ class FeatureSelectionMixin:
 
         if len(self.feature_cols) == 0:
             raise ValueError("Please select at least one input column.")
+        if RUN_COLUMN in self.df and set(self.feature_cols + self.target_cols) & SIMULINK_EVIDENCE_COLUMNS:
+            raise ValueError("Select simulated signals/labels, not time, run IDs or source-row evidence.")
+        if CAPTURE_ID in self.df and set(self.feature_cols + self.target_cols) & EVIDENCE_COLUMNS:
+            raise ValueError("Select calibrated signals and confirmed labels. Capture IDs, time and row numbers are evidence.")
 
         if task_type in (TASK_CLASSIFICATION, TASK_REGRESSION):
             if len(self.target_cols) != 1:

@@ -68,6 +68,7 @@ from nn_training_studio.preprocessing import (
     prepare_scaled_training_data,
     regression_metrics,
     safe_train_test_split,
+    split_pipeline_records,
     summarize_training_preflight,
 )
 from nn_training_studio.results import (
@@ -193,6 +194,9 @@ class TrainingWorkflowMixin:
             state=tk.NORMAL if self.trained_model is not None else tk.DISABLED)
         self.custom_training_results_button.pack(side=tk.LEFT, padx=5)
         ttk.Label(custom_row, text="Heatmaps, t-SNE, training curves, and editable AI plots").pack(side=tk.LEFT, padx=6)
+        if getattr(self, "processing_pipeline_training", None):
+            ttk.Button(custom_row, text="Open Processing Pipeline",
+                       command=self.open_pipeline_builder).pack(side=tk.LEFT, padx=5)
 
         preflight_frame = ttk.Frame(self.content_frame)
         preflight_frame.pack(fill=tk.X, padx=5, pady=(2, 3))
@@ -578,10 +582,28 @@ class TrainingWorkflowMixin:
             )
 
     def collect_training_settings(self):
+        pipeline = getattr(self, "processing_pipeline_training", None)
+        if pipeline and (
+            list(self.feature_cols) != pipeline["features"]
+            or list(self.target_cols) != [pipeline["label"]]
+            or self.task_type_var.get() != TASK_CLASSIFICATION
+            or self.get_analysis_sampling_frequency() != pipeline["rate"]
+            or self.filter_method_var.get() != "No filter"
+            or self.custom_filter_enabled_var.get()
+            or not self.df.equals(self.raw_df)
+        ):
+            raise ValueError(
+                "Pipeline training needs the original prepared columns, label and sample rate. "
+                "Make preprocessing changes in Processing Pipeline and send the data to training again."
+            )
         device_info = DeviceManager.resolve_tensorflow(
             self.training_device_var.get()
         )
         return {
+            "processing_pipeline": pipeline,
+            "simulink_import": json.loads(json.dumps(getattr(self, "simulink_import_metadata", None))),
+            "scope_import": json.loads(json.dumps(getattr(self, "scope_import_metadata", None))),
+            "sampling_frequency_hz": self.get_analysis_sampling_frequency() if self.data_mode_var.get() == DATA_MODE_TABULAR else None,
             "early_stopping": self.collect_early_stopping_settings(),
             "data_mode": self.data_mode_var.get(),
             "task_type": self.task_type_var.get(),
@@ -945,7 +967,22 @@ class TrainingWorkflowMixin:
                 )
             )
 
-            if use_window:
+            pipeline_training = settings.get("processing_pipeline")
+            training_count = None
+            if pipeline_training:
+                if output_units != num_classes or output_activation != "softmax":
+                    raise ValueError("Use one softmax output per class for pipeline training.")
+                X_model, y_model, train, validation, test = split_pipeline_records(
+                    X, y_source, annotation_group_ids, window=window_size if use_window else None,
+                    stride=stride, test_size=test_size, validation_split=validation_split,
+                )
+                pool = np.r_[train, validation]
+                training_count = len(train)
+                X_train, X_test, y_train_raw, y_test_raw = (
+                    X_model[pool], X_model[test], y_model[pool], y_model[test],
+                )
+                input_shape = X_model.shape[1:]
+            elif use_window:
                 self.thread_log(f"\nCreating windows: window={window_size}, stride={stride}")
 
                 if len(X) < window_size:
@@ -976,17 +1013,15 @@ class TrainingWorkflowMixin:
 
             self.thread_log(f"Model input shape: {input_shape}")
 
-            X_train, X_test, y_train_raw, y_test_raw = safe_train_test_split(
-                X_model,
-                y_model,
-                test_size,
-                task_type=task_type
-            )
+            if not pipeline_training:
+                X_train, X_test, y_train_raw, y_test_raw = safe_train_test_split(
+                    X_model, y_model, test_size, task_type=task_type,
+                )
 
             partitions = prepare_scaled_training_data(
                 X_train, X_test, y_train_raw, y_test_raw,
                 scaler_option, target_scaler_option, task_type,
-                validation_split, len(target_cols),
+                validation_split, len(target_cols), training_count=training_count,
             )
             X_train = partitions["X_train"]
             X_validation = partitions["X_validation"]
@@ -1268,6 +1303,7 @@ class TrainingWorkflowMixin:
                     f"R²: {result_metrics['r2']:.8f}"
                 )
 
+            input_units = (settings.get("scope_import") or settings.get("simulink_import") or {}).get("units", {})
             metadata = {
                 "package_format_version": 7,
                 "application_version": APP_VERSION,
@@ -1311,6 +1347,15 @@ class TrainingWorkflowMixin:
                     "custom_filter_ai_report"
                 ],
 
+                "simulation_source": settings.get("simulink_import"),
+                "scope_source": settings.get("scope_import"),
+                "processing_pipeline_sha256": pipeline_training["digest"] if pipeline_training else None,
+                "sampling_frequency_hz": settings.get("sampling_frequency_hz"),
+                "input_units": {
+                    name: input_units[name]
+                    for name in feature_cols
+                    if input_units.get(name)
+                },
                 "missing_value_method": missing_method,
                 "normalization": scaler_option,
                 "target_normalization": target_scaler_option,
@@ -2112,6 +2157,10 @@ class TrainingWorkflowMixin:
                 "the trained model, scaler, preprocessing, feature order, and "
                 "metadata together.",
             )
+            return
+        if (self.metadata or {}).get("processing_pipeline_sha256"):
+            self.open_pipeline_builder()
+            self.pipeline_builder_window.status.set("Use Export ZIP with model to package the trained classifier.")
             return
         self.open_deploy_integrate(
             initial_model_path=self.last_saved_model_package_path

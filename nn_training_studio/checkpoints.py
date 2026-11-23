@@ -35,6 +35,7 @@ def _training_run_fingerprint(df, settings):
     intentionally excluded.
     """
     fingerprint_keys = (
+        "simulink_import",
         "data_mode",
         "task_type",
         "feature_cols",
@@ -87,6 +88,8 @@ def _training_run_fingerprint(df, settings):
     }
     # Changed preprocessing must not reuse a model fitted with old scalers.
     configuration["training_pipeline_revision"] = "training-only-scaling-v1"
+    if settings.get("processing_pipeline"):
+        configuration["processing_pipeline"] = settings["processing_pipeline"]
     configuration["early_stopping"] = validate_early_stopping_settings(
         settings.get("early_stopping")
     )

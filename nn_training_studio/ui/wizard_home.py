@@ -99,6 +99,8 @@ class HomeMixin:
             padx=(18, 0),
         )
 
+        self.build_ai_setup_intro(self.content_frame)
+
         status_frame = ttk.Frame(self.content_frame)
         self.home_status_frame = status_frame
         status_frame.pack(fill=tk.X, padx=12, pady=(0, 6))
@@ -258,11 +260,18 @@ class HomeMixin:
             wraplength=650,
             justify=tk.LEFT,
         ).pack(anchor="w", padx=14, pady=(0, 7))
+        deploy_actions = ttk.Frame(apply_frame)
+        deploy_actions.pack(anchor="w", padx=14, pady=(0, 12))
         ttk.Button(
-            apply_frame,
+            deploy_actions,
             text="Open Deploy & Integrate",
             command=self.open_deploy_integrate,
-        ).pack(anchor="w", padx=14, pady=(0, 12))
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            deploy_actions,
+            text="Open NN Scope",
+            command=self.open_scope_deployment,
+        ).pack(side=tk.LEFT)
 
         prepare_frame = ttk.LabelFrame(
             middle,
@@ -317,6 +326,8 @@ class HomeMixin:
             text="Open Filter & Export",
             command=self.show_filter_workspace,
         ).pack(anchor="w", padx=14, pady=(0, 12))
+        ttk.Button(prepare_frame, text="Open Processing Pipeline",
+                   command=self.open_pipeline_builder).pack(anchor="w", padx=14, pady=(0, 10))
 
         manage_frame = ttk.LabelFrame(
             self.content_frame,
@@ -667,6 +678,41 @@ class HomeMixin:
             self.active_workspace = WORKSPACE_SIGNAL
             self.step_titles = list(self.signal_step_titles)
 
+    def open_pipeline_builder(self, initial_path=None):
+        from nn_training_studio.ui.pipeline_builder import PipelineBuilder
+
+        window = getattr(self, "pipeline_builder_window", None)
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            if initial_path:
+                window._act(window._load_recipe, initial_path)
+        else:
+            self.pipeline_builder_window = PipelineBuilder(self, initial_path)
+
+    def start_pipeline_training(self, pipeline, frame, label, source):
+        self.reset_training_project(DATA_MODE_TABULAR)
+        self.raw_df = frame.copy()
+        self.filtered_df = frame.copy()
+        self.custom_filtered_df = frame.copy()
+        self.df = frame.copy()
+        self.file_path = source
+        self.feature_cols = list(pipeline.outputs)
+        self.target_cols = [label]
+        self.label_col = label
+        self.label_var.set(label)
+        self.output_units_var.set(str(frame[label].nunique()))
+        self.scaler_var.set("No normalization")
+        self.missing_var.set("Drop rows")
+        self.sampling_frequency_var.set("" if pipeline.rate is None else str(pipeline.rate))
+        self.guided_data_order_var.set("Ordered measurements")
+        self.processing_pipeline_training = {
+            "digest": pipeline.digest, "features": self.feature_cols.copy(),
+            "rate": pipeline.rate, "label": label,
+        }
+        self.current_step = 4
+        self.show_step()
+
     def reset_training_project(self, data_mode):
         """Clear project data while preserving global provider settings."""
         self.clear_content()
@@ -692,6 +738,9 @@ class HomeMixin:
         self.set_training_workspace(data_mode)
         self.current_step = 0
         self.raw_df = None
+        self.simulink_import_metadata = None
+        self.scope_import_metadata = None
+        self.processing_pipeline_training = None
         self.filtered_df = None
         self.custom_filtered_df = None
         self.df = None

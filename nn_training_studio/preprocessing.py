@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 from nn_training_studio.constants import (
     DATA_MODE_IMAGE,
     MODEL_TYPE_SAFE_AI_LEGACY,
@@ -286,6 +287,19 @@ def summarize_training_preflight(df, settings):
         or model_type in ("CNN", "LSTM", "CNN-LSTM", "LSTM Autoencoder")
         or custom_uses_windows
     )
+    if settings.get("processing_pipeline"):
+        X, _, train, validation, test = split_pipeline_records(
+            prepared[feature_cols].to_numpy(dtype=float),
+            prepared[target_cols[0]].to_numpy(), prepared["annotation_segment_id"].to_numpy(),
+            window=int(settings["window_size"]) if uses_windows else None,
+            stride=int(settings["stride"]), test_size=settings["test_size"],
+            validation_split=settings["validation_split"],
+        )
+        return {
+            "source_rows": len(df), "usable_rows": len(prepared), "prepared_samples": len(X),
+            "training_samples": len(train), "validation_samples": len(validation),
+            "test_samples": len(test), "uses_windows": uses_windows,
+        }
     if uses_windows:
         window_size = int(settings["window_size"])
         forecast_horizon = (
@@ -381,7 +395,7 @@ def inverse_transform_targets(values, target_scaler):
 
 def prepare_scaled_training_data(
     X_pool, X_test, y_pool, y_test, scaler_option, target_scaler_option,
-    task_type, validation_split, target_feature_count,
+    task_type, validation_split, target_feature_count, *, training_count=None,
 ):
     """Hold out validation before fitting feature and target normalization.
 
@@ -389,7 +403,8 @@ def prepare_scaled_training_data(
     scaler format used by saved-model inference, including forecast horizons.
     Window overlap and earlier imputation are separate preprocessing concerns.
     """
-    boundary = _validation_training_count(len(X_pool), validation_split)
+    boundary = (_validation_training_count(len(X_pool), validation_split)
+                if training_count is None else training_count)
     X_train, X_validation = X_pool[:boundary], X_pool[boundary:]
     y_train, y_validation = y_pool[:boundary], y_pool[boundary:]
     scaler, X_train = fit_optional_scaler(X_train, scaler_option)
@@ -425,6 +440,46 @@ def prepare_scaled_training_data(
         "y_train": y_train, "y_validation": y_validation, "y_test": y_test,
         "scaler": scaler, "target_scaler": target_scaler,
     }
+
+
+def split_pipeline_records(X, labels, groups, *, window, stride, test_size, validation_split):
+    """Keep whole recordings separate and align the window grid with pipeline deployment."""
+    if not all(np.isfinite(value) and 0 < value < 1 for value in (test_size, validation_split)):
+        raise ValueError("Test and validation percentages must be between 0 and 100.")
+    if window is not None and not 1 <= stride <= window:
+        raise ValueError("For pipeline training, stride must be between 1 and the window length.")
+    groups = np.asarray(groups)
+    boundaries = np.r_[0, np.flatnonzero(groups[1:] != groups[:-1]) + 1, len(groups)]
+    inputs, targets, memberships = [], [], []
+    for first, end in zip(boundaries[:-1], boundaries[1:]):
+        samples, classes = X[first:end], labels[first:end]
+        if window is not None:
+            if len(samples) < window:
+                raise ValueError(f"Recording {groups[first]} is shorter than the model window.")
+            samples, classes = create_supervised_windows(
+                samples, classes, window, stride, TASK_CLASSIFICATION,
+            )
+        inputs.append(samples)
+        targets.append(classes)
+        memberships.extend([groups[first]] * len(samples))
+    X, labels = np.concatenate(inputs), np.concatenate(targets)
+    memberships = np.asarray(memberships)
+    count = len(np.unique(memberships))
+    if count < 3:
+        raise ValueError("Pipeline training needs at least three separate recordings.")
+    test_count = min(count - 2, max(1, int(np.ceil(count * test_size))))
+    validation_count = min(count - test_count - 1, max(1, int(np.ceil((count - test_count) * validation_split))))
+    all_classes = set(labels)
+    if len(all_classes) < 2:
+        raise ValueError("At least two classes must appear after creating the model input windows.")
+    splitter = GroupShuffleSplit(n_splits=64, test_size=test_count, random_state=42)
+    for attempt, (pool, test) in enumerate(splitter.split(X, groups=memberships)):
+        validation_splitter = GroupShuffleSplit(n_splits=1, test_size=validation_count, random_state=43 + attempt)
+        train, validation = next(validation_splitter.split(pool, groups=memberships[pool]))
+        train, validation = pool[train], pool[validation]
+        if set(labels[train]) == all_classes:
+            return X, labels, train, validation, test
+    raise ValueError("Could not place every class in training while holding out entire recordings. Add more labeled recordings.")
 
 
 def regression_metrics(y_true, y_pred):

@@ -20,6 +20,8 @@ from nn_training_studio.image_data import (
     build_image_dataset_profile,
     scan_image_dataset,
 )
+from nn_training_studio.simulink_data import save_matlab_export_tools
+from nn_training_studio.ui.simulink_import import SimulinkImportDialog
 
 
 class DataLoadingMixin:
@@ -63,6 +65,12 @@ class DataLoadingMixin:
         )
         self.step1_load_button.grid(row=0, column=0, sticky="w", padx=5)
         self.file_label.grid(row=0, column=1, sticky="ew", padx=10)
+        if self.data_mode_var.get() != DATA_MODE_IMAGE:
+            actions = ttk.Frame(top_frame)
+            actions.grid(row=1, column=0, columnspan=2, sticky="w", padx=5, pady=(8, 0))
+            ttk.Button(actions, text="Import MATLAB / Simulink", command=self.load_simulink_exports).pack(side=tk.LEFT)
+            ttk.Button(actions, text="Save MATLAB export helpers...", command=self.save_simulink_export_helpers).pack(side=tk.LEFT, padx=8)
+            ttk.Button(actions, text="Import NN Scope Captures", command=self.load_scope_captures).pack(side=tk.LEFT)
 
         info_frame = ttk.LabelFrame(self.content_frame, text="Dataset Preview")
         info_frame.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -110,6 +118,10 @@ class DataLoadingMixin:
                 raise ValueError("Choose a CSV, XLSX, or XLS file.")
             if self.raw_df.empty:
                 raise ValueError("The selected dataset is empty.")
+            self.simulink_import_metadata = None
+            self.scope_import_metadata = None
+            self.processing_pipeline_training = None
+            self.sampling_frequency_var.set("")
             self.filtered_df = self.raw_df.copy()
             self.custom_filtered_df = self.filtered_df.copy()
             self.df = self.custom_filtered_df.copy()
@@ -164,6 +176,74 @@ class DataLoadingMixin:
         except Exception as e:
             messagebox.showerror("Load Error", f"Failed to load CSV file:\n{e}")
 
+    def load_simulink_exports(self):
+        if self._operation_busy():
+            return
+        paths = filedialog.askopenfilenames(
+            parent=self, title="Select MATLAB / Simulink runs (matching columns and sample rate)",
+            filetypes=[("Simulation exports", "*.csv *.mat"), ("CSV", "*.csv"), ("MAT (-v7 numeric arrays)", "*.mat")])
+        if paths:
+            SimulinkImportDialog(self, tuple(paths), self.apply_simulink_dataset)
+
+    def load_scope_captures(self):
+        from nn_training_studio.scope_runtime.dataset import load_capture_dataset
+
+        if self._operation_busy():
+            return
+        paths = filedialog.askopenfilenames(parent=self, title="Select native_samples.csv capture files",
+                                           filetypes=[("Saved capture CSV", "*.csv")])
+        if paths:
+            SimulinkImportDialog(self, tuple(paths), self.apply_scope_dataset,
+                                 loader=load_capture_dataset, title="Import NN Scope Captures")
+
+    def apply_scope_dataset(self, dataset):
+        self.reset_training_project(DATA_MODE_TABULAR)
+        self.raw_df = dataset.frame
+        self.filtered_df = self.raw_df.copy()
+        self.custom_filtered_df = self.raw_df.copy()
+        self.df = self.raw_df.copy()
+        self.file_path = dataset.metadata["sources"][0]["file"]
+        self.scope_import_metadata = dataset.metadata
+        self.sampling_frequency_var.set(f"{dataset.rate:.12g}")
+        self.guided_data_order_var.set("Ordered measurements")
+        self.feature_cols = dataset.features
+        self.show_step()
+
+    def apply_simulink_dataset(self, dataset):
+        # Commit only after every selected file passed validation.
+        self.reset_training_project(DATA_MODE_TABULAR)
+        self.raw_df = dataset.frame.copy()
+        self.filtered_df = self.raw_df.copy()
+        self.custom_filtered_df = self.raw_df.copy()
+        self.df = self.raw_df.copy()
+        self.file_path = dataset.metadata["sources"][0]["file"]
+        self.simulink_import_metadata = dataset.metadata
+        self.sampling_frequency_var.set(f"{dataset.sample_rate_hz:.12g}")
+        self.guided_data_order_var.set("Ordered measurements")
+        self.feature_cols = list(dataset.feature_columns)
+        self.target_cols = [dataset.target_column] if dataset.target_column else []
+        self.label_col = dataset.target_column or ""
+        self.label_var.set(self.label_col)
+        if dataset.target_column:
+            self.output_units_var.set(str(self.df[dataset.target_column].nunique()))
+        self.show_step()
+
+    def save_simulink_export_helpers(self):
+        directory = filedialog.askdirectory(parent=self, title="Save MATLAB helpers beside your Simulink model")
+        if not directory:
+            return
+        try:
+            save_matlab_export_tools(directory)
+            messagebox.showinfo("MATLAB helpers saved",
+                "In MATLAB, add this folder to your path, then run:\n\n"
+                "out = sim('your_model');\n"
+                "nn_export_simulink(out, 'run.csv', 'Label', 'Normal');\n\n"
+                "Or run and export together:\n"
+                "nn_run_and_export('your_model', 'run.csv', 'Label', 'Normal');\n\n"
+                "Enable signal logging in your model first. Select Import MATLAB / Simulink when the file is ready.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("MATLAB helpers", str(exc), parent=self)
+
     def load_image_folder(self):
         directory = filedialog.askdirectory(
             title=(
@@ -176,6 +256,9 @@ class DataLoadingMixin:
 
         try:
             image_records, class_names = scan_image_dataset(directory)
+            self.simulink_import_metadata = None
+            self.scope_import_metadata = None
+            self.processing_pipeline_training = None
             self.set_training_workspace(DATA_MODE_IMAGE)
             self.image_directory = str(Path(directory).resolve())
             self.image_records = image_records.copy()
@@ -293,6 +376,17 @@ class DataLoadingMixin:
         self.step1_text.insert(tk.END, f"Rows: {preview_df.shape[0]}\n")
         self.step1_text.insert(tk.END, f"Columns: {preview_df.shape[1]}\n")
         self.step1_text.insert(tk.END, f"Missing values: {int(preview_df.isna().sum().sum())}\n\n")
+        simulation = getattr(self, "simulink_import_metadata", None)
+        if simulation:
+            self.step1_text.insert(tk.END,
+                f"Simulink runs: {len(simulation['sources'])}; sample rate: {simulation['sample_rate_hz']:g} Hz.\n"
+                "Time and run identifiers are excluded from suggested inputs. Windows stay inside a run.\n"
+                "Select/confirm the target signals or labels before training.\n\n")
+        scope = getattr(self, "scope_import_metadata", None)
+        if scope:
+            self.step1_text.insert(tk.END,
+                f"NN Scope captures: {len(scope['sources'])}; {scope['sample_rate_hz']:g} Hz.\n"
+                "Add confirmed targets for supervised training. Review the evaluation split before interpreting accuracy.\n\n")
 
         self.step1_text.insert(tk.END, "Column names:\n")
         self.step1_text.insert(tk.END, str(list(preview_df.columns)))

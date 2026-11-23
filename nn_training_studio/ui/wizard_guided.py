@@ -141,6 +141,7 @@ class GuidedWorkflowMixin:
             return
         self._guided_note("What do you want to achieve?").configure(font=("Arial", 18, "bold"))
         self._guided_note("Choose a starting point. Each workflow explains what you need and what to do next.")
+        self.build_ai_setup_intro(self.content_frame)
         if self.df is not None:
             self._guided_note(f"Current project: {Path(self.file_path or 'Prepared data').name} · "
                               f"{self.GUIDED_STAGES[self.guided_stage]}")
@@ -156,6 +157,7 @@ class GuidedWorkflowMixin:
             ("Use an existing AI model", "Load a saved model and try it on your data.", self.open_model_evaluation),
             ("Add AI to my application", "Connect a trained model or AI service to your code.", self.open_deploy_integrate),
             ("Prepare and label my data", "Clean measurements or label pictures and signal intervals.", self.open_prepare_chooser),
+            ("Build a processing pipeline", "Combine filters, features and scaling into a runnable package.", self.open_pipeline_builder),
         )
         self.guided_home_cards = []
         for index, (title, description, command) in enumerate(choices):
@@ -493,6 +495,8 @@ class GuidedWorkflowMixin:
                               ("Save complete test results", self.save_training_results),
                               ("Connect saved model to my application", self.open_last_saved_deployment),
                               ("Try an existing model on new data", self.open_model_evaluation)])
+        if (self.metadata or {}).get("processing_pipeline_sha256"):
+            self._guided_actions([("Open Processing Pipeline to package this model", self.open_pipeline_builder)])
         self._guided_note("The integration workspace can also add an external AI service to your application without local training.")
         self._guided_note("Project drafts save your setup and prepared tables. Trained models, result files, and image files are saved separately.")
 
@@ -521,6 +525,9 @@ class GuidedWorkflowMixin:
         return {
             "format": "nnstudio-project-draft", "version": 1,
             "data_mode": self.data_mode_var.get(), "source_file": self.file_path,
+            "simulink_import": getattr(self, "simulink_import_metadata", None),
+            "scope_import": getattr(self, "scope_import_metadata", None),
+            "processing_pipeline": getattr(self, "processing_pipeline_training", None),
             "image_directory": self.image_directory, "image_class_names": self.image_class_names,
             "guided_stage": min(self.guided_stage, 2), "current_step": min(self.current_step, 6),
             "variables": {name: getattr(self, name).get() for name in self.DRAFT_VARIABLES},
@@ -624,6 +631,10 @@ class GuidedWorkflowMixin:
             for name in ("source_file", "image_directory"):
                 if payload.get(name) is not None and not isinstance(payload[name], str):
                     raise ValueError(f"Invalid draft path: {name}.")
+            if payload.get("simulink_import") is not None and not isinstance(payload["simulink_import"], dict):
+                raise ValueError("Invalid simulation provenance in draft.")
+            if payload.get("scope_import") is not None and not isinstance(payload["scope_import"], dict):
+                raise ValueError("Invalid NN Scope capture provenance in draft.")
             if not isinstance(payload.get("image_class_names", []), list):
                 raise ValueError("Invalid image classes in draft.")
             if not isinstance(payload.get("pending_preparation_steps", []), list):
@@ -644,6 +655,9 @@ class GuidedWorkflowMixin:
             for name in ("feature_cols", "target_cols", "selected_filter_cols", "selected_custom_filter_cols"):
                 setattr(self, name, [c for c in payload.get("columns", {}).get(name, []) if c in self.df.columns])
             self.file_path = payload.get("source_file")
+            self.simulink_import_metadata = payload.get("simulink_import")
+            self.scope_import_metadata = payload.get("scope_import")
+            self.processing_pipeline_training = payload.get("processing_pipeline")
             self.label_col = self.target_cols[0] if self.target_cols else ""
             self.label_var.set(self.label_col)
             self.image_directory = payload.get("image_directory")

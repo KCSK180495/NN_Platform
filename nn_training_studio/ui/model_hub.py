@@ -185,6 +185,7 @@ class ModelLoadingHubWindow(tk.Toplevel):
             "No model has been inspected yet.\n\n"
             "Supported inputs:\n"
             "• NN Studio signal/image model package (.zip)\n"
+            "• NN Studio processing pipeline (.zip)\n"
             "• NN Studio object-detection package (.zip)\n"
             "• YOLO trainable weights or architecture (.pt/.yaml)\n"
             "• ONNX, TensorRT, TorchScript, TFLite, SavedModel, or OpenVINO "
@@ -263,8 +264,9 @@ class ModelLoadingHubWindow(tk.Toplevel):
                 "Prediction readiness: Ready"
                 if descriptor["inference_ready"]
                 else (
-                    "Prediction readiness: Architecture only — train or load "
-                    "weights first"
+                    "Feature computation available"
+                    if descriptor["model_type"] == "pipeline_package"
+                    else "Prediction readiness: Architecture only — train or load weights first"
                 )
             ),
         ]
@@ -287,7 +289,7 @@ class ModelLoadingHubWindow(tk.Toplevel):
         for capability in descriptor.get("capabilities", []):
             self.capability_list.insert(tk.END, "✓ " + capability)
         self.open_button.config(state=tk.NORMAL)
-        self.deploy_button.config(state=tk.NORMAL)
+        self.deploy_button.config(state=tk.DISABLED if descriptor["model_type"] == "pipeline_package" else tk.NORMAL)
         self.status_var.set(
             "Model inspection passed. Review the information, then open the "
             "application workspace."
@@ -299,6 +301,16 @@ class ModelLoadingHubWindow(tk.Toplevel):
         model_type = self.descriptor["model_type"]
         parent = self.master
         selected_path = self.selected_path
+        if model_type == "pipeline_package":
+            self.destroy()
+            parent.open_pipeline_builder(selected_path)
+            return
+        if model_type == "scope_package":
+            from .deployment_scope import ScopeDeploymentWindow
+
+            self.destroy()
+            ScopeDeploymentWindow(parent, initial_model_path=selected_path)
+            return
         if model_type == "keras_package":
             self.destroy()
             ModelEvaluationWindow(
